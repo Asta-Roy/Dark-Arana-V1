@@ -26,9 +26,11 @@ router.post("/generate-image", async (req, res) => {
 
     const openai = getOpenAIClient();
     const response = await openai.images.generate({
-      model: "gpt-image-1",
+      model: "dall-e-3",
       prompt: body.data.prompt,
-      size,
+      size: size === "1536x1024" || size === "1024x1536" ? "1024x1024" : size,
+      response_format: "b64_json",
+      n: 1,
     });
 
     const b64_json = (response.data?.[0] as { b64_json?: string })?.b64_json ?? "";
