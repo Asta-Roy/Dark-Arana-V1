@@ -10,11 +10,10 @@ import {
   ListOpenaiMessagesParams,
   SendOpenaiMessageParams,
 } from "@workspace/api-zod";
-import { getOpenAIClient, isAIConfigured } from "../../lib/openai-client.js";
+import { getGeminiClient, isAIConfigured } from "../../lib/gemini-client.js";
 
 const router = Router();
 
-// List all conversations
 router.get("/conversations", async (req, res) => {
   try {
     const all = await db
@@ -28,14 +27,12 @@ router.get("/conversations", async (req, res) => {
   }
 });
 
-// Create a new conversation
 router.post("/conversations", async (req, res) => {
   const body = CreateOpenaiConversationBody.safeParse(req.body);
   if (!body.success) {
     res.status(400).json({ error: "Invalid request body" });
     return;
   }
-
   try {
     const [conv] = await db
       .insert(conversations)
@@ -48,31 +45,26 @@ router.post("/conversations", async (req, res) => {
   }
 });
 
-// Get conversation with messages
 router.get("/conversations/:id", async (req, res) => {
   const params = GetOpenaiConversationParams.safeParse({ id: Number(req.params.id) });
   if (!params.success) {
     res.status(400).json({ error: "Invalid conversation id" });
     return;
   }
-
   try {
     const [conv] = await db
       .select()
       .from(conversations)
       .where(eq(conversations.id, params.data.id));
-
     if (!conv) {
       res.status(404).json({ error: "Conversation not found" });
       return;
     }
-
     const msgs = await db
       .select()
       .from(messages)
       .where(eq(messages.conversationId, params.data.id))
       .orderBy(messages.createdAt);
-
     res.json({ ...conv, messages: msgs });
   } catch (err) {
     req.log.error({ err }, "Failed to get conversation");
@@ -80,25 +72,21 @@ router.get("/conversations/:id", async (req, res) => {
   }
 });
 
-// Delete a conversation
 router.delete("/conversations/:id", async (req, res) => {
   const params = DeleteOpenaiConversationParams.safeParse({ id: Number(req.params.id) });
   if (!params.success) {
     res.status(400).json({ error: "Invalid conversation id" });
     return;
   }
-
   try {
     const [existing] = await db
       .select()
       .from(conversations)
       .where(eq(conversations.id, params.data.id));
-
     if (!existing) {
       res.status(404).json({ error: "Conversation not found" });
       return;
     }
-
     await db.delete(messages).where(eq(messages.conversationId, params.data.id));
     await db.delete(conversations).where(eq(conversations.id, params.data.id));
     res.status(204).send();
@@ -108,14 +96,12 @@ router.delete("/conversations/:id", async (req, res) => {
   }
 });
 
-// List messages in conversation
 router.get("/conversations/:id/messages", async (req, res) => {
   const params = ListOpenaiMessagesParams.safeParse({ id: Number(req.params.id) });
   if (!params.success) {
     res.status(400).json({ error: "Invalid conversation id" });
     return;
   }
-
   try {
     const msgs = await db
       .select()
@@ -129,7 +115,6 @@ router.get("/conversations/:id/messages", async (req, res) => {
   }
 });
 
-// Send a message and stream the response
 router.post("/conversations/:id/messages", async (req, res) => {
   const params = SendOpenaiMessageParams.safeParse({ id: Number(req.params.id) });
   const body = SendOpenaiMessageBody.safeParse(req.body);
@@ -157,55 +142,48 @@ router.post("/conversations/:id/messages", async (req, res) => {
       return;
     }
 
-    // Save user message
     await db.insert(messages).values({
       conversationId: convId,
       role: "user",
       content: body.data.content,
     });
 
-    // Load all messages for context
     const history = await db
       .select()
       .from(messages)
       .where(eq(messages.conversationId, convId))
       .orderBy(messages.createdAt);
 
-    const chatMessages = [
-      {
-        role: "system" as const,
-        content:
-          "You are Darck Arana, a powerful and helpful AI assistant. You can help with conversations, answer questions, and assist with various tasks. Be concise, accurate, and friendly.",
-      },
-      ...history.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })),
-    ];
+    const chatMessages = history.map((m) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    }));
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
 
     let fullResponse = "";
-    const openai = getOpenAIClient();
+    const ai = getGeminiClient();
 
-    const stream = await openai.chat.completions.create({
-      model: "gpt-4o",
-      max_tokens: 8192,
-      messages: chatMessages,
-      stream: true,
+    const stream = await ai.models.generateContentStream({
+      model: "gemini-2.5-flash",
+      contents: chatMessages,
+      config: {
+        maxOutputTokens: 8192,
+        systemInstruction:
+          "You are Darck Arana, a powerful and helpful AI assistant. You can help with conversations, answer questions, and assist with various tasks. Be concise, accurate, and friendly.",
+      },
     });
 
     for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        fullResponse += content;
-        res.write(`data: ${JSON.stringify({ content })}\n\n`);
+      const text = chunk.text;
+      if (text) {
+        fullResponse += text;
+        res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
       }
     }
 
-    // Save assistant response
     await db.insert(messages).values({
       conversationId: convId,
       role: "assistant",

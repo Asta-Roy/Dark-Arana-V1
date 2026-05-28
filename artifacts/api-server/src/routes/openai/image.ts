@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { GenerateOpenaiImageBody } from "@workspace/api-zod";
-import { getOpenAIClient, isAIConfigured } from "../../lib/openai-client.js";
-import OpenAI from "openai";
+import { getGeminiClient, isAIConfigured } from "../../lib/gemini-client.js";
+import { Modality } from "@google/genai";
 
 const router = Router();
 
@@ -18,23 +18,27 @@ router.post("/generate-image", async (req, res) => {
   }
 
   try {
-    const validSizes = ["1024x1024", "1536x1024", "1024x1536"] as const;
-    type ImageSize = (typeof validSizes)[number];
-    const size: ImageSize = validSizes.includes(body.data.size as ImageSize)
-      ? (body.data.size as ImageSize)
-      : "1024x1024";
-
-    const openai = getOpenAIClient();
-    const response = await openai.images.generate({
-      model: "dall-e-3",
-      prompt: body.data.prompt,
-      size: size === "1536x1024" || size === "1024x1536" ? "1024x1024" : size,
-      response_format: "b64_json",
-      n: 1,
+    const ai = getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-05-20",
+      contents: [{ role: "user", parts: [{ text: body.data.prompt }] }],
+      config: {
+        responseModalities: [Modality.IMAGE, Modality.TEXT],
+      },
     });
 
-    const b64_json = (response.data?.[0] as { b64_json?: string })?.b64_json ?? "";
-    res.json({ b64_json });
+    const parts = response.candidates?.[0]?.content?.parts ?? [];
+    const imagePart = parts.find((p) => p.inlineData?.mimeType?.startsWith("image/"));
+
+    if (!imagePart?.inlineData?.data) {
+      res.status(500).json({ error: "No image returned" });
+      return;
+    }
+
+    res.json({
+      b64_json: imagePart.inlineData.data,
+      mimeType: imagePart.inlineData.mimeType,
+    });
   } catch (err) {
     req.log.error({ err }, "Failed to generate image");
     res.status(500).json({ error: "Image generation failed" });
