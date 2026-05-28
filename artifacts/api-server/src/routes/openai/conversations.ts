@@ -10,7 +10,7 @@ import {
   ListOpenaiMessagesParams,
   SendOpenaiMessageParams,
 } from "@workspace/api-zod";
-import { openai } from "@workspace/integrations-openai-ai-server";
+import { getOpenAIClient, isAIConfigured } from "../../lib/openai-client.js";
 
 const router = Router();
 
@@ -139,6 +139,11 @@ router.post("/conversations/:id/messages", async (req, res) => {
     return;
   }
 
+  if (!isAIConfigured()) {
+    res.status(503).json({ error: "AI_NOT_CONFIGURED" });
+    return;
+  }
+
   const convId = params.data.id;
 
   try {
@@ -183,6 +188,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
     res.setHeader("Connection", "keep-alive");
 
     let fullResponse = "";
+    const openai = getOpenAIClient();
 
     const stream = await openai.chat.completions.create({
       model: "gpt-5.1",

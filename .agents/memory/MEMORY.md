@@ -1,0 +1,1 @@
+- [OpenAI AI integration phone verification](openai-phone-verification.md) — Replit AI Integrations for OpenAI requires phone verification; server must use lazy client initialization to avoid startup crash when env vars are missing.
