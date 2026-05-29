@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { GenerateOpenaiImageBody } from "@workspace/api-zod";
 import { getGeminiClient, isAIConfigured } from "../../lib/gemini-client.js";
-import { Modality } from "@google/genai";
 
 const router = Router();
 
@@ -19,25 +18,32 @@ router.post("/generate-image", async (req, res) => {
 
   try {
     const ai = getGeminiClient();
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash-preview-image-generation",
-      contents: [{ role: "user", parts: [{ text: body.data.prompt }] }],
+
+    const response = await ai.models.generateImages({
+      model: "imagen-3.0-generate-002",
+      prompt: body.data.prompt,
       config: {
-        responseModalities: [Modality.IMAGE, Modality.TEXT],
+        numberOfImages: 1,
+        outputMimeType: "image/jpeg",
+        aspectRatio: "1:1",
       },
     });
 
-    const parts = response.candidates?.[0]?.content?.parts ?? [];
-    const imagePart = parts.find((p) => p.inlineData?.mimeType?.startsWith("image/"));
+    const image = response.generatedImages?.[0]?.image;
 
-    if (!imagePart?.inlineData?.data) {
+    if (!image?.imageBytes) {
       res.status(500).json({ error: "No image returned from AI model" });
       return;
     }
 
+    const b64 =
+      typeof image.imageBytes === "string"
+        ? image.imageBytes
+        : Buffer.from(image.imageBytes).toString("base64");
+
     res.json({
-      b64_json: imagePart.inlineData.data,
-      mimeType: imagePart.inlineData.mimeType,
+      b64_json: b64,
+      mimeType: "image/jpeg",
     });
   } catch (err) {
     req.log.error({ err }, "Failed to generate image");
