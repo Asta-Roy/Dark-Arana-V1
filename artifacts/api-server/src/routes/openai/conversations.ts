@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { conversations, messages } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import {
   CreateOpenaiConversationBody,
   SendOpenaiMessageBody,
@@ -14,11 +14,17 @@ import { getGeminiClient, isAIConfigured } from "../../lib/gemini-client.js";
 
 const router = Router();
 
+function getSessionId(req: import("express").Request): string {
+  return (req.headers["x-session-id"] as string) || "default";
+}
+
 router.get("/conversations", async (req, res) => {
+  const sessionId = getSessionId(req);
   try {
     const all = await db
       .select()
       .from(conversations)
+      .where(eq(conversations.sessionId, sessionId))
       .orderBy(desc(conversations.createdAt));
     res.json(all);
   } catch (err) {
@@ -33,10 +39,11 @@ router.post("/conversations", async (req, res) => {
     res.status(400).json({ error: "Invalid request body" });
     return;
   }
+  const sessionId = getSessionId(req);
   try {
     const [conv] = await db
       .insert(conversations)
-      .values({ title: body.data.title })
+      .values({ title: body.data.title, sessionId })
       .returning();
     res.status(201).json(conv);
   } catch (err) {
@@ -51,11 +58,12 @@ router.get("/conversations/:id", async (req, res) => {
     res.status(400).json({ error: "Invalid conversation id" });
     return;
   }
+  const sessionId = getSessionId(req);
   try {
     const [conv] = await db
       .select()
       .from(conversations)
-      .where(eq(conversations.id, params.data.id));
+      .where(and(eq(conversations.id, params.data.id), eq(conversations.sessionId, sessionId)));
     if (!conv) {
       res.status(404).json({ error: "Conversation not found" });
       return;
@@ -78,11 +86,12 @@ router.delete("/conversations/:id", async (req, res) => {
     res.status(400).json({ error: "Invalid conversation id" });
     return;
   }
+  const sessionId = getSessionId(req);
   try {
     const [existing] = await db
       .select()
       .from(conversations)
-      .where(eq(conversations.id, params.data.id));
+      .where(and(eq(conversations.id, params.data.id), eq(conversations.sessionId, sessionId)));
     if (!existing) {
       res.status(404).json({ error: "Conversation not found" });
       return;
@@ -102,7 +111,16 @@ router.get("/conversations/:id/messages", async (req, res) => {
     res.status(400).json({ error: "Invalid conversation id" });
     return;
   }
+  const sessionId = getSessionId(req);
   try {
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.id, params.data.id), eq(conversations.sessionId, sessionId)));
+    if (!conv) {
+      res.status(404).json({ error: "Conversation not found" });
+      return;
+    }
     const msgs = await db
       .select()
       .from(messages)
@@ -130,12 +148,13 @@ router.post("/conversations/:id/messages", async (req, res) => {
   }
 
   const convId = params.data.id;
+  const sessionId = getSessionId(req);
 
   try {
     const [conv] = await db
       .select()
       .from(conversations)
-      .where(eq(conversations.id, convId));
+      .where(and(eq(conversations.id, convId), eq(conversations.sessionId, sessionId)));
 
     if (!conv) {
       res.status(404).json({ error: "Conversation not found" });
@@ -162,6 +181,8 @@ router.post("/conversations/:id/messages", async (req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
 
     let fullResponse = "";
     const ai = getGeminiClient();

@@ -30,6 +30,11 @@ export default function HistoryTab() {
   const { data: stats } = useGetOpenaiStats();
   const deleteConv = useDeleteOpenaiConversation();
 
+  function handleAbout() {
+    Haptics.selectionAsync();
+    router.push("/about");
+  }
+
   const topPad = Platform.OS === "web" ? 67 : insets.top;
 
   function handleDelete(id: number) {
@@ -50,6 +55,9 @@ export default function HistoryTab() {
       paddingTop: topPad + 16,
       paddingHorizontal: 20,
       paddingBottom: 16,
+      flexDirection: "row",
+      alignItems: "flex-end",
+      justifyContent: "space-between",
     },
     title: {
       fontSize: 28,
@@ -57,6 +65,17 @@ export default function HistoryTab() {
       color: colors.foreground,
       fontFamily: "Inter_700Bold",
       letterSpacing: -0.5,
+    },
+    aboutBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: 2,
     },
     statsRow: {
       flexDirection: "row",
@@ -151,6 +170,12 @@ export default function HistoryTab() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>History</Text>
+        <Pressable
+          style={({ pressed }) => [styles.aboutBtn, { opacity: pressed ? 0.7 : 1 }]}
+          onPress={handleAbout}
+        >
+          <Feather name="info" size={18} color={colors.mutedForeground} />
+        </Pressable>
       </View>
 
       <View style={styles.statsRow}>

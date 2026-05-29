@@ -20,7 +20,7 @@ router.post("/generate-image", async (req, res) => {
   try {
     const ai = getGeminiClient();
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-05-20",
+      model: "gemini-2.0-flash-preview-image-generation",
       contents: [{ role: "user", parts: [{ text: body.data.prompt }] }],
       config: {
         responseModalities: [Modality.IMAGE, Modality.TEXT],
@@ -31,7 +31,7 @@ router.post("/generate-image", async (req, res) => {
     const imagePart = parts.find((p) => p.inlineData?.mimeType?.startsWith("image/"));
 
     if (!imagePart?.inlineData?.data) {
-      res.status(500).json({ error: "No image returned" });
+      res.status(500).json({ error: "No image returned from AI model" });
       return;
     }
 
