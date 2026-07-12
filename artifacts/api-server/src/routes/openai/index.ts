@@ -5,13 +5,8 @@ import statsRouter from "./stats";
 
 const router = Router();
 
-// Chat
-router.use("/openai/chat", conversationsRouter);
-
-// Images
-router.use("/openai/images", imageRouter);
-
-// Stats
-router.use("/openai/stats", statsRouter);
+router.use("/openai", conversationsRouter);
+router.use("/openai", imageRouter);
+router.use("/openai", statsRouter);
 
 export default router;

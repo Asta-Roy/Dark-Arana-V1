@@ -30,7 +30,7 @@ export default function ChatTab() {
   async function handleNewChat() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const title = `Chat ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-    const conv = await createConversation.mutateAsync({ title });
+    const conv = await createConversation.mutateAsync({ data: { title } });
     router.push(`/chat/${conv.id}`);
   }
 
