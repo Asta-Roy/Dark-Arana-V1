@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getGetOpenaiConversationQueryKey } from "@workspace/api-client-react";
+import { getGetOpenaiConversationQueryKey, getListOpenaiConversationsQueryKey } from "@workspace/api-client-react";
+
+export type ChatMode = "normal" | "thinking" | "speed" | "article";
 
 export function useChatStream(conversationId: number) {
   const [isStreaming, setIsStreaming] = useState(false);
@@ -8,17 +10,21 @@ export function useChatStream(conversationId: number) {
   const queryClient = useQueryClient();
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const sendMessage = useCallback(async (content: string) => {
+  const sendMessage = useCallback(async (content: string, mode: ChatMode = "normal") => {
     setIsStreaming(true);
     setStreamedContent("");
-    
+
     abortControllerRef.current = new AbortController();
 
     try {
+      const sessionId = localStorage.getItem("darck-session-id") || "default";
       const response = await fetch(`/api/openai/conversations/${conversationId}/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-ID": sessionId,
+        },
+        body: JSON.stringify({ content, mode }),
         signal: abortControllerRef.current.signal,
       });
 
@@ -48,6 +54,7 @@ export function useChatStream(conversationId: number) {
               }
               if (parsed.done) {
                 queryClient.invalidateQueries({ queryKey: getGetOpenaiConversationQueryKey(conversationId) });
+                queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
                 setIsStreaming(false);
                 return;
               }
@@ -64,6 +71,7 @@ export function useChatStream(conversationId: number) {
     } finally {
       setIsStreaming(false);
       queryClient.invalidateQueries({ queryKey: getGetOpenaiConversationQueryKey(conversationId) });
+      queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
     }
   }, [conversationId, queryClient]);
 

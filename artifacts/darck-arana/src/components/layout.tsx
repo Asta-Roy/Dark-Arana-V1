@@ -155,7 +155,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
           <div>
             <h2 className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Recent Sessions
+              محادثاتي
             </h2>
             <div className="space-y-0.5">
               {conversations?.map((conv) => (

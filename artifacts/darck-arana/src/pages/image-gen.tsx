@@ -4,87 +4,96 @@ import { OpenaiImageInputSize } from "@workspace/api-client-react/src/generated/
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Card } from "@/components/ui/card";
-import { Image as ImageIcon, Download, Loader2 } from "lucide-react";
+import { Image as ImageIcon, Download, Loader2, Sparkles } from "lucide-react";
 
 export function ImageGenPage() {
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState<OpenaiImageInputSize>("1024x1024");
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageData, setImageData] = useState<{ url: string; mime: string } | null>(null);
   const generateMutation = useGenerateOpenaiImage();
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
     try {
-      const res = await generateMutation.mutateAsync({
-        data: { prompt, size }
-      });
-      setImageUrl(`data:image/png;base64,${res.b64_json}`);
+      const res = await generateMutation.mutateAsync({ data: { prompt, size } });
+      const mime = (res as any).mimeType || "image/jpeg";
+      setImageData({ url: `data:${mime};base64,${res.b64_json}`, mime });
     } catch (e) {
       console.error(e);
     }
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-8">
-      <div className="max-w-4xl mx-auto space-y-8">
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-3xl mx-auto px-6 py-10 space-y-8">
         <header>
-          <h1 className="text-3xl font-bold text-white flex items-center gap-3 mb-2">
-            <ImageIcon className="w-8 h-8 text-secondary" /> Visual Synthesis
-          </h1>
-          <p className="text-muted-foreground">Generate high-fidelity assets using neural rendering.</p>
+          <div className="flex items-center gap-2 mb-1">
+            <Sparkles className="w-4 h-4 text-secondary" />
+            <span className="text-xs font-mono text-secondary uppercase tracking-widest">مولّد الصور</span>
+          </div>
+          <h1 className="text-2xl font-bold text-white">توليد صور بالذكاء الاصطناعي</h1>
+          <p className="text-muted-foreground text-sm mt-1">صف ما تريد رؤيته وسيقوم النظام بإنشائه.</p>
         </header>
 
-        <Card className="p-6 bg-card/40 border-secondary/20 backdrop-blur-sm space-y-6">
-          <div className="space-y-4">
-            <label className="text-sm font-medium text-white block uppercase tracking-wider">Input Parameter</label>
-            <Textarea 
+        <div className="rounded-2xl bg-card/30 border border-border/50 p-6 space-y-5">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-white/80">وصف الصورة</label>
+            <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe the desired visual output..."
-              className="min-h-[120px] bg-background/50 border-border focus-visible:ring-secondary resize-none text-white text-lg"
+              placeholder="مثال: غروب الشمس على البحر بألوان برتقالية وبنفسجية..."
+              className="min-h-[100px] bg-background/40 border-border/50 focus-visible:ring-secondary/50 resize-none text-white text-sm leading-relaxed placeholder:text-muted-foreground/40"
+              style={{ direction: "rtl" }}
             />
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
-            <div className="w-full sm:w-64 space-y-2">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Resolution</label>
+          <div className="flex flex-col sm:flex-row gap-3 items-end">
+            <div className="space-y-1.5 w-full sm:w-56">
+              <label className="text-xs text-muted-foreground">النسبة والأبعاد</label>
               <Select value={size} onValueChange={(v: OpenaiImageInputSize) => setSize(v)}>
-                <SelectTrigger className="bg-background/50 border-border h-12">
-                  <SelectValue placeholder="Select dimension" />
+                <SelectTrigger className="bg-background/40 border-border/50 h-10 text-sm">
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1024x1024">1024x1024 (Square)</SelectItem>
-                  <SelectItem value="1536x1024">1536x1024 (Landscape)</SelectItem>
-                  <SelectItem value="1024x1536">1024x1536 (Portrait)</SelectItem>
+                  <SelectItem value="1024x1024">مربع ١٠٢٤×١٠٢٤</SelectItem>
+                  <SelectItem value="1536x1024">أفقي ١٥٣٦×١٠٢٤</SelectItem>
+                  <SelectItem value="1024x1536">عمودي ١٠٢٤×١٥٣٦</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <Button 
-              onClick={handleGenerate} 
+            <Button
+              onClick={handleGenerate}
               disabled={generateMutation.isPending || !prompt.trim()}
-              className="w-full sm:w-auto h-12 px-8 bg-secondary hover:bg-secondary/80 text-secondary-foreground shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all font-bold tracking-wide"
+              className="h-10 px-6 bg-secondary hover:bg-secondary/80 text-secondary-foreground font-semibold shadow-[0_0_15px_rgba(7,181,209,0.3)] transition-all disabled:opacity-50 disabled:shadow-none w-full sm:w-auto"
             >
               {generateMutation.isPending ? (
-                <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> Synthesizing...</>
-              ) : "Execute Render"}
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> جاري التوليد...</>
+              ) : (
+                <><Sparkles className="w-4 h-4 mr-2" /> توليد الصورة</>
+              )}
             </Button>
           </div>
-        </Card>
 
-        {imageUrl && (
-          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
+          {generateMutation.isError && (
+            <div className="rounded-xl bg-destructive/10 border border-destructive/30 px-4 py-3 text-sm text-destructive">
+              فشل توليد الصورة. حاول مرة أخرى.
+            </div>
+          )}
+        </div>
+
+        {imageData && (
+          <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium text-white uppercase tracking-wider">Output Signal</h3>
-              <a href={imageUrl} download="synthesis.png">
-                <Button variant="outline" size="sm" className="border-secondary/30 hover:bg-secondary/20 hover:text-secondary gap-2">
-                  <Download className="w-4 h-4" /> Download Asset
+              <h3 className="text-sm font-medium text-white/80">الصورة المُولَّدة</h3>
+              <a href={imageData.url} download="darck-arana-image.jpg">
+                <Button variant="outline" size="sm" className="border-secondary/30 hover:bg-secondary/10 hover:text-secondary gap-1.5 h-8 text-xs">
+                  <Download className="w-3.5 h-3.5" /> تحميل
                 </Button>
               </a>
             </div>
-            <Card className="overflow-hidden border-secondary/40 shadow-[0_0_30px_rgba(6,182,212,0.15)] bg-black/50 p-2">
-              <img src={imageUrl} alt="Generated visual" className="w-full h-auto rounded object-contain max-h-[600px] mx-auto" />
-            </Card>
+            <div className="rounded-2xl overflow-hidden border border-border/50 bg-black/30">
+              <img src={imageData.url} alt="Generated" className="w-full h-auto object-contain max-h-[600px] mx-auto" />
+            </div>
           </div>
         )}
       </div>

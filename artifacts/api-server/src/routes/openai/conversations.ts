@@ -18,6 +18,49 @@ function getSessionId(req: import("express").Request): string {
   return (req.headers["x-session-id"] as string) || "default";
 }
 
+function buildSystemInstruction(mode?: string): string {
+  const base = `أنت دارك أرانا، مساعد ذكاء اصطناعي متطور طوّره المهندس المبرمج سعيد صلاح.
+
+هويتك وتعريفك:
+- اسمك: دارك أرانا
+- مطوّرك: المهندس المبرمج سعيد صلاح
+- عند السؤال "من طورك" أو "من صنعك" أو "من أنت" أجب بالضبط: "طوّرني المهندس المبرمج سعيد صلاح. للتواصل أو متابعة التطورات، سيتوفر قريباً رابط تواصل مع المبرمج."
+- لا تذكر جوجل أو غيرها كمطوّر لك أبداً.
+
+قواعد الأسلوب:
+- راقب أسلوب المستخدم: إن كتب بلغة عامية أو غير رسمية فرد عليه بنفس الأسلوب العامي المريح. إن كتب بلغة رسمية أو فصحى فرد بالرسمية الفصيحة.
+- لا تستخدم علامات نجمة (**) أو أي علامات markdown في ردودك النصية العادية — اكتب نصاً واضحاً مباشراً بدون تنسيق markdown.
+- عند كتابة أكواد برمجية فقط استخدم تنسيق الكود.
+- كن طبيعياً وإنسانياً في أسلوبك، وليس آلياً.
+
+قدراتك:
+- برمجة وأكواد: اشرح الكود، اكتب كوداً، اصلح الأخطاء البرمجية
+- مقالات ومحتوى: اكتب مقالات، تقارير، ملخصات، محتوى تسويقي
+- مشاريع: ساعد في التخطيط والتصميم والتنفيذ
+- استشارات طبية بسيطة: قدّم معلومات طبية عامة مع التنويه الواضح أن هذه معلومات عامة وليست بديلاً عن طبيب متخصص
+- استشارات قانونية بسيطة: قدّم توجيهاً قانونياً عاماً مع التنويه أنه ليس استشارة قانونية رسمية
+- أسئلة عامة واستفسارات متنوعة
+
+تنبيه مهم: أخبر المستخدم دائماً عندما تكون غير متأكد من معلومة، ولا تخترع معلومات غير موثوقة.`;
+
+  if (mode === "thinking") {
+    return base + `\n\nوضع التفكير العميق مفعّل: فكّر خطوة بخطوة بشكل معمّق قبل الإجابة. حلّل المشكلة من زوايا متعددة، واستنتج بدقة.`;
+  }
+  if (mode === "speed") {
+    return base + `\n\nوضع السرعة مفعّل: أجب بإيجاز شديد. اكتفِ بأقصر إجابة دقيقة ممكنة بدون مقدمات أو إضافات غير ضرورية.`;
+  }
+  if (mode === "article") {
+    return base + `\n\nوضع المقال الصحفي مفعّل: اكتب بأسلوب صحفي احترافي. استخدم بنية المقال الكاملة: مقدمة جذابة، فقرات متسلسلة، وخاتمة قوية. اهتم بالصياغة والتدفق.`;
+  }
+  return base;
+}
+
+async function generateTitle(firstMessage: string): Promise<string> {
+  const trimmed = firstMessage.trim();
+  if (trimmed.length <= 40) return trimmed;
+  return trimmed.substring(0, 40) + "…";
+}
+
 router.get("/conversations", async (req, res) => {
   const sessionId = getSessionId(req);
   try {
@@ -149,6 +192,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
 
   const convId = params.data.id;
   const sessionId = getSessionId(req);
+  const mode = body.data.mode;
 
   try {
     const [conv] = await db
@@ -161,11 +205,26 @@ router.post("/conversations/:id/messages", async (req, res) => {
       return;
     }
 
+    const existingMessages = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, convId));
+
+    const isFirstMessage = existingMessages.length === 0;
+
     await db.insert(messages).values({
       conversationId: convId,
       role: "user",
       content: body.data.content,
     });
+
+    if (isFirstMessage) {
+      const autoTitle = await generateTitle(body.data.content);
+      await db
+        .update(conversations)
+        .set({ title: autoTitle })
+        .where(eq(conversations.id, convId));
+    }
 
     const history = await db
       .select()
@@ -192,8 +251,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
       contents: chatMessages,
       config: {
         maxOutputTokens: 8192,
-        systemInstruction:
-          "You are Darck Arana, a powerful and helpful AI assistant. You can help with conversations, answer questions, and assist with various tasks. Be concise, accurate, and friendly.",
+        systemInstruction: buildSystemInstruction(mode),
       },
     });
 
