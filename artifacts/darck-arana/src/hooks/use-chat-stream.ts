@@ -17,7 +17,7 @@ export function useChatStream(conversationId: number) {
     abortControllerRef.current = new AbortController();
 
     try {
-      const sessionId = localStorage.getItem("darck-session-id") || "default";
+      const sessionId = localStorage.getItem("darck-arana-session-id") || "default";
       const response = await fetch(`/api/openai/conversations/${conversationId}/messages`, {
         method: "POST",
         headers: {

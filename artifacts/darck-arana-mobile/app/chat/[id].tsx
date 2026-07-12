@@ -2,6 +2,7 @@ import { useGetOpenaiConversation } from "@workspace/api-client-react";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { fetch } from "expo/fetch";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import React, { useEffect, useRef, useState } from "react";
@@ -78,9 +79,14 @@ export default function ChatScreen() {
         ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
         : "";
 
+      const sessionId = (await AsyncStorage.getItem("darck-arana-session-id")) || "default";
       const res = await fetch(`${base}/api/openai/conversations/${convId}/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+          "X-Session-ID": sessionId,
+        },
         body: JSON.stringify({ content: text }),
       });
 
