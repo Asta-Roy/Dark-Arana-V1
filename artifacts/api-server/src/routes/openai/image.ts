@@ -1,8 +1,10 @@
 import { Router } from "express";
 import { GenerateOpenaiImageBody } from "@workspace/api-zod";
-import { getGeminiClient, isAIConfigured } from "../../lib/gemini-client.js";
 
 const router = Router();
+
+// Pollinations.ai — free image generation, no API key required
+const POLLINATIONS_URL = "https://image.pollinations.ai/prompt";
 
 router.post("/generate-image", async (req, res) => {
   const body = GenerateOpenaiImageBody.safeParse(req.body);
@@ -11,45 +13,30 @@ router.post("/generate-image", async (req, res) => {
     return res.status(400).json({ error: "Invalid request body" });
   }
 
-  if (!isAIConfigured()) {
-    return res.status(503).json({ error: "AI_NOT_CONFIGURED" });
-  }
-
   try {
-    const ai = getGeminiClient();
+    const encodedPrompt = encodeURIComponent(body.data.prompt);
+    const url = `${POLLINATIONS_URL}/${encodedPrompt}?width=1024&height=1024&nologo=true&model=flux`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash-preview-image-generation",
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: body.data.prompt }],
-        },
-      ],
+    const imgResponse = await fetch(url, {
+      headers: { "User-Agent": "DarckArana/1.0" },
     });
 
-    const parts = response.candidates?.[0]?.content?.parts || [];
-
-    const imagePart = parts.find(
-      (p) => p.inlineData?.mimeType?.startsWith("image/")
-    );
-
-    if (!imagePart?.inlineData?.data) {
-      return res.status(500).json({
-        error: "No image returned from AI model",
-      });
+    if (!imgResponse.ok) {
+      req.log?.error?.(
+        { status: imgResponse.status, url },
+        "Pollinations fetch failed"
+      );
+      return res.status(500).json({ error: "Image generation failed" });
     }
 
-    return res.json({
-      b64_json: imagePart.inlineData.data,
-      mimeType: imagePart.inlineData.mimeType || "image/jpeg",
-    });
-  } catch (err) {
-    req.log?.error?.({ err }, "Failed to generate image");
+    const contentType = imgResponse.headers.get("content-type") || "image/jpeg";
+    const arrayBuffer = await imgResponse.arrayBuffer();
+    const b64 = Buffer.from(arrayBuffer).toString("base64");
 
-    return res.status(500).json({
-      error: "Image generation failed",
-    });
+    return res.json({ b64_json: b64, mimeType: contentType });
+  } catch (err) {
+    req.log?.error?.({ err }, "Failed to generate image via Pollinations");
+    return res.status(500).json({ error: "Image generation failed" });
   }
 });
 

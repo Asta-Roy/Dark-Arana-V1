@@ -1,1 +1,2 @@
 - [OpenAI AI integration phone verification](openai-phone-verification.md) — Replit AI Integrations for OpenAI requires phone verification; server must use lazy client initialization to avoid startup crash when env vars are missing.
+- [Image Generation Approach](image-generation.md) — Use Pollinations.ai (free, no key). Gemini image models and OpenAI DALL-E both fail in this environment.
