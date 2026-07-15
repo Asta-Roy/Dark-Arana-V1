@@ -1,11 +1,14 @@
 import { Router } from "express";
 import { GenerateOpenaiImageBody } from "@workspace/api-zod";
 import { getGeminiClient, isAIConfigured } from "../../lib/gemini-client.js";
+import { verifyToken } from "../../lib/auth.js";
+import { checkAndIncrementUsage } from "../../lib/usage.js";
 
 const router = Router();
 
 const POLLINATIONS_URL = "https://image.pollinations.ai/prompt";
 
+// ترجمة وتحسين البرومبت من العربية للإنجليزية
 async function translateAndEnhancePrompt(prompt: string): Promise<string> {
   if (!isAIConfigured()) return prompt;
 
@@ -33,6 +36,16 @@ Prompt: "${prompt}"`,
   }
 }
 
+// استخراج بيانات المستخدم من الـ token اختياري (لو موجود)
+function getUserFromRequest(req: import("express").Request): { id: number; plan: "free" | "pro" | "premium" } | null {
+  const authHeader = req.headers["authorization"];
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  const payload = verifyToken(authHeader.slice(7));
+  if (!payload) return null;
+  const plan = (["free", "pro", "premium"].includes(payload.plan) ? payload.plan : "free") as "free" | "pro" | "premium";
+  return { id: payload.id, plan };
+}
+
 router.post("/generate-image", async (req, res) => {
   const body = GenerateOpenaiImageBody.safeParse(req.body);
 
@@ -40,10 +53,25 @@ router.post("/generate-image", async (req, res) => {
     return res.status(400).json({ error: "Invalid request body" });
   }
 
+  // نجيب بيانات المستخدم لو موجود token
+  const user = getUserFromRequest(req);
+
+  // ── فحص الليمت حسب الباقة ──
+  if (user) {
+    const check = await checkAndIncrementUsage(user.id, user.plan, "image");
+    if (!check.allowed) {
+      return res.status(429).json({
+        error: "limit_reached",
+        message: check.reason ?? "وصلت للحد الأقصى — اشترك للمتابعة",
+        upgrade: true,
+      });
+    }
+  }
+
   try {
     const englishPrompt = await translateAndEnhancePrompt(body.data.prompt);
 
-    req.log?.info?.({ original: body.data.prompt, translated: englishPrompt }, "Image prompt translated");
+    req.log?.info?.({ original: body.data.prompt, translated: englishPrompt, plan: user?.plan ?? "anonymous" }, "Image prompt translated");
 
     const encodedPrompt = encodeURIComponent(englishPrompt);
     const url = `${POLLINATIONS_URL}/${encodedPrompt}?width=1024&height=1024&nologo=true&model=flux`;

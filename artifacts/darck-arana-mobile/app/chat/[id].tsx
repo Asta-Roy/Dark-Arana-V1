@@ -1,6 +1,7 @@
 import { useGetOpenaiConversation } from "@workspace/api-client-react";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
 import { fetch } from "expo/fetch";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -8,7 +9,10 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
+  Image,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -19,11 +23,20 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
+import { useAuth } from "@/contexts/AuthContext";
+
+// ─── الـ base URL للـ API ────────────────────────────────────────────────────
+const BASE = process.env.EXPO_PUBLIC_DOMAIN
+  ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
+  : "";
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  // نوع الرسالة: نص أو صورة أو فيديو
+  type?: "text" | "image" | "video";
+  mediaUrl?: string;
 }
 
 let messageCounter = 0;
@@ -32,18 +45,24 @@ function genId(): string {
   return `m-${Date.now()}-${messageCounter}-${Math.random().toString(36).substr(2, 6)}`;
 }
 
+// ─── دالة checkLimit — تتحقق من باقة المستخدم وتطلع رسالة ──────────────────
+// هنا نعتمد على استجابة السيرفر بـ 429 limit_reached
+
 export default function ChatScreen() {
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const convId = Number(id);
+  const { token } = useAuth();
 
   const { data: conv } = useGetOpenaiConversation(convId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [showTyping, setShowTyping] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [limitModal, setLimitModal] = useState<{ msg: string } | null>(null);
   const inputRef = useRef<TextInput>(null);
   const initializedRef = useRef(false);
 
@@ -58,37 +77,137 @@ export default function ChatScreen() {
           id: genId(),
           role: m.role as "user" | "assistant",
           content: m.content,
+          ...parseMediaContent(m.content),
         }))
       );
     }
   }, [conv?.messages]);
 
+  // تحليل محتوى الرسالة — صورة أو فيديو أو نص
+  function parseMediaContent(content: string): { type: "text" | "image" | "video"; mediaUrl?: string } {
+    if (content.startsWith("[IMAGE:") && content.endsWith("]")) {
+      return { type: "image", mediaUrl: content.slice(7, -1) };
+    }
+    if (content.startsWith("[VIDEO:") && content.endsWith("]")) {
+      return { type: "video", mediaUrl: content.slice(7, -1) };
+    }
+    return { type: "text" };
+  }
+
+  // ─── رفع الملف على Cloudinary ────────────────────────────────────────────
+  async function uploadToCloudinary(uri: string, mimeType: string): Promise<string> {
+    // نجيب إعدادات Cloudinary من السيرفر
+    const configRes = await fetch(`${BASE}/api/upload/config`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    if (!configRes.ok) throw new Error("خدمة الرفع غير متاحة حالياً");
+
+    const { uploadUrl, uploadPreset } = await configRes.json() as {
+      uploadUrl: string;
+      uploadPreset: string;
+      cloudName: string;
+    };
+
+    // نرفع الملف على Cloudinary
+    const formData = new FormData();
+    const filename = uri.split("/").pop() ?? "upload";
+    // @ts-ignore — React Native FormData type
+    formData.append("file", { uri, type: mimeType, name: filename });
+    formData.append("upload_preset", uploadPreset);
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!uploadRes.ok) throw new Error("فشل رفع الملف على Cloudinary");
+
+    const data = await uploadRes.json() as { secure_url: string };
+    return data.secure_url;
+  }
+
+  // ─── فتح منتقي الصور/الفيديو 📎 ────────────────────────────────────────
+  async function handleAttach() {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("الإذن مطلوب", "يرجى السماح بالوصول للصور والفيديوهات");
+      return;
+    }
+
+    // نفتح منتقي الميديا
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images", "videos"],
+      quality: 0.85,
+      allowsEditing: false,
+    });
+
+    if (result.canceled || !result.assets.length) return;
+
+    const asset = result.assets[0];
+    const isVideo = asset.type === "video";
+
+    setUploading(true);
+    try {
+      const mimeType = isVideo ? "video/mp4" : "image/jpeg";
+      const cloudUrl = await uploadToCloudinary(asset.uri, mimeType);
+
+      // نضيف الصورة/الفيديو كرسالة من المستخدم
+      const tag = isVideo ? "VIDEO" : "IMAGE";
+      const content = `[${tag}:${cloudUrl}]`;
+      const newMsg: Message = {
+        id: genId(),
+        role: "user",
+        content,
+        type: isVideo ? "video" : "image",
+        mediaUrl: cloudUrl,
+      };
+
+      setMessages((prev) => [...prev, newMsg]);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) {
+      Alert.alert("خطأ", e.message || "فشل رفع الملف");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // ─── إرسال الرسالة ───────────────────────────────────────────────────────
   async function handleSend() {
     const text = input.trim();
     if (!text || isStreaming) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setInput("");
-    setMessages((prev) => [...prev, { id: genId(), role: "user", content: text }]);
+    setMessages((prev) => [...prev, { id: genId(), role: "user", content: text, type: "text" }]);
     setIsStreaming(true);
     setShowTyping(true);
     inputRef.current?.focus();
 
     try {
-      const base = process.env.EXPO_PUBLIC_DOMAIN
-        ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
-        : "";
-
       const sessionId = (await AsyncStorage.getItem("darck-arana-session-id")) || "default";
-      const res = await fetch(`${base}/api/openai/conversations/${convId}/messages`, {
+      const res = await fetch(`${BASE}/api/openai/conversations/${convId}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
           "X-Session-ID": sessionId,
+          // نرسل الـ token عشان يطبق قوة الـ AI المناسبة
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ content: text }),
       });
+
+      // فحص ليمت الباقة
+      if (res.status === 429) {
+        const data = await res.json() as { message?: string };
+        setLimitModal({ msg: data.message ?? "وصلت للحد الأقصى — اشترك للمتابعة" });
+        setShowTyping(false);
+        setIsStreaming(false);
+        return;
+      }
 
       if (!res.ok) throw new Error("Request failed");
 
@@ -119,7 +238,7 @@ export default function ChatScreen() {
                 setShowTyping(false);
                 setMessages((prev) => [
                   ...prev,
-                  { id: genId(), role: "assistant", content: fullContent },
+                  { id: genId(), role: "assistant", content: fullContent, type: "text" },
                 ]);
                 assistantAdded = true;
               } else {
@@ -140,7 +259,7 @@ export default function ChatScreen() {
       setShowTyping(false);
       setMessages((prev) => [
         ...prev,
-        { id: genId(), role: "assistant", content: "Sorry, an error occurred. Please try again." },
+        { id: genId(), role: "assistant", content: "حدث خطأ، حاول مرة أخرى.", type: "text" },
       ]);
     } finally {
       setIsStreaming(false);
@@ -153,138 +272,121 @@ export default function ChatScreen() {
   const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
-      flexDirection: "row",
-      alignItems: "center",
-      paddingTop: topPad + 8,
-      paddingHorizontal: 16,
-      paddingBottom: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-      backgroundColor: colors.card,
-      gap: 12,
+      flexDirection: "row", alignItems: "center",
+      paddingTop: topPad + 8, paddingHorizontal: 16,
+      paddingBottom: 12, borderBottomWidth: 1,
+      borderBottomColor: colors.border, backgroundColor: colors.card, gap: 12,
     },
-    backBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    headerTitle: {
-      flex: 1,
-      fontSize: 17,
-      fontWeight: "600" as const,
-      color: colors.foreground,
-      fontFamily: "Inter_600SemiBold",
-    },
-    statusDot: {
-      width: 8,
-      height: 8,
-      borderRadius: 4,
-      backgroundColor: "#22c55e",
-    },
+    backBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+    headerTitle: { flex: 1, fontSize: 17, fontWeight: "600" as const, color: colors.foreground, fontFamily: "Inter_600SemiBold" },
+    statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#22c55e" },
     bubble: {
-      maxWidth: "80%",
-      borderRadius: colors.radius,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      marginHorizontal: 16,
-      marginVertical: 4,
+      maxWidth: "80%", borderRadius: colors.radius,
+      paddingHorizontal: 14, paddingVertical: 10,
+      marginHorizontal: 16, marginVertical: 4,
     },
-    userBubble: {
-      backgroundColor: colors.primary,
-      alignSelf: "flex-end",
-    },
-    aiBubble: {
-      backgroundColor: colors.card,
-      alignSelf: "flex-start",
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    bubbleText: {
-      fontSize: 15,
-      lineHeight: 22,
-      fontFamily: "Inter_400Regular",
-    },
+    userBubble: { backgroundColor: colors.primary, alignSelf: "flex-end" },
+    aiBubble: { backgroundColor: colors.card, alignSelf: "flex-start", borderWidth: 1, borderColor: colors.border },
+    bubbleText: { fontSize: 15, lineHeight: 22, fontFamily: "Inter_400Regular" },
     userText: { color: "#fff" },
     aiText: { color: colors.foreground },
-    typingContainer: {
-      paddingHorizontal: 16,
-      paddingVertical: 8,
-      alignSelf: "flex-start",
+    // ─── صور/فيديو في البالون ─────────────────────────────────────────────
+    mediaImage: { width: 220, height: 220, borderRadius: 12 },
+    videoPlaceholder: {
+      width: 220, height: 140, borderRadius: 12, backgroundColor: "#1a1a2e",
+      alignItems: "center", justifyContent: "center", gap: 8,
     },
+    videoText: { color: "#fff", fontSize: 13, fontFamily: "Inter_400Regular" },
+    typingContainer: { paddingHorizontal: 16, paddingVertical: 8, alignSelf: "flex-start" },
     typingRow: {
-      backgroundColor: colors.card,
-      borderRadius: colors.radius,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      flexDirection: "row",
-      gap: 5,
-      alignItems: "center",
-      borderWidth: 1,
-      borderColor: colors.border,
+      backgroundColor: colors.card, borderRadius: colors.radius,
+      paddingHorizontal: 14, paddingVertical: 10, flexDirection: "row",
+      gap: 5, alignItems: "center", borderWidth: 1, borderColor: colors.border,
     },
-    dot: {
-      width: 7,
-      height: 7,
-      borderRadius: 3.5,
-      backgroundColor: colors.mutedForeground,
-    },
-    emptyContainer: {
-      flex: 1,
-      alignItems: "center",
-      justifyContent: "center",
-      paddingHorizontal: 40,
-    },
-    emptyText: {
-      color: colors.mutedForeground,
-      fontSize: 15,
-      textAlign: "center",
-      fontFamily: "Inter_400Regular",
-      marginTop: 12,
-    },
+    dot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: colors.mutedForeground },
+    emptyContainer: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 40 },
+    emptyText: { color: colors.mutedForeground, fontSize: 15, textAlign: "center", fontFamily: "Inter_400Regular", marginTop: 12 },
     inputRow: {
-      flexDirection: "row",
-      alignItems: "flex-end",
-      paddingHorizontal: 16,
-      paddingTop: 10,
-      paddingBottom: bottomPad + 10,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
-      backgroundColor: colors.card,
-      gap: 10,
+      flexDirection: "row", alignItems: "flex-end",
+      paddingHorizontal: 12, paddingTop: 10,
+      paddingBottom: bottomPad + 10, borderTopWidth: 1,
+      borderTopColor: colors.border, backgroundColor: colors.card, gap: 8,
+    },
+    // ─── زرار 📎 ──────────────────────────────────────────────────────────
+    attachBtn: {
+      width: 42, height: 42, borderRadius: 21,
+      backgroundColor: colors.muted, alignItems: "center", justifyContent: "center",
     },
     textInput: {
-      flex: 1,
-      backgroundColor: colors.muted,
-      borderRadius: 20,
-      paddingHorizontal: 16,
-      paddingTop: 10,
-      paddingBottom: 10,
-      fontSize: 15,
-      color: colors.foreground,
-      fontFamily: "Inter_400Regular",
-      maxHeight: 120,
+      flex: 1, backgroundColor: colors.muted, borderRadius: 20,
+      paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10,
+      fontSize: 15, color: colors.foreground, fontFamily: "Inter_400Regular", maxHeight: 120,
     },
     sendBtn: {
-      width: 42,
-      height: 42,
-      borderRadius: 21,
-      backgroundColor: colors.primary,
-      alignItems: "center",
-      justifyContent: "center",
+      width: 42, height: 42, borderRadius: 21,
+      backgroundColor: colors.primary, alignItems: "center", justifyContent: "center",
     },
-    sendBtnDisabled: {
-      backgroundColor: colors.muted,
+    sendBtnDisabled: { backgroundColor: colors.muted },
+    // ─── Modal ليمت الباقة ─────────────────────────────────────────────────
+    modalOverlay: {
+      flex: 1, backgroundColor: "rgba(0,0,0,0.7)",
+      justifyContent: "center", alignItems: "center", padding: 24,
     },
+    modalCard: {
+      backgroundColor: colors.card, borderRadius: 20,
+      padding: 24, width: "100%", alignItems: "center",
+      borderWidth: 1, borderColor: colors.border,
+    },
+    modalTitle: { fontSize: 20, fontWeight: "700", color: colors.foreground, fontFamily: "Inter_700Bold", marginTop: 12 },
+    modalMsg: { fontSize: 14, color: colors.mutedForeground, fontFamily: "Inter_400Regular", textAlign: "center", marginTop: 8, lineHeight: 22 },
+    modalUpgradeBtn: {
+      backgroundColor: colors.primary, borderRadius: 14,
+      paddingVertical: 14, paddingHorizontal: 32, marginTop: 20,
+    },
+    modalUpgradeText: { color: "#fff", fontSize: 15, fontWeight: "700", fontFamily: "Inter_700Bold" },
+    modalCloseBtn: { marginTop: 12 },
+    modalCloseText: { color: colors.mutedForeground, fontSize: 14, fontFamily: "Inter_400Regular" },
   });
 
+  // ─── عرض فقاعة الرسالة ───────────────────────────────────────────────────
+  function renderBubble(item: Message) {
+    const isUser = item.role === "user";
+    const bubbleStyle = [styles.bubble, isUser ? styles.userBubble : styles.aiBubble];
+
+    // رسالة صورة
+    if (item.type === "image" && item.mediaUrl) {
+      return (
+        <View style={[bubbleStyle, { padding: 6 }]}>
+          <Image source={{ uri: item.mediaUrl }} style={styles.mediaImage} resizeMode="cover" />
+        </View>
+      );
+    }
+
+    // رسالة فيديو — نعرض مكان الفيديو (الـ preview لا يعمل في web بسهولة)
+    if (item.type === "video" && item.mediaUrl) {
+      return (
+        <View style={[bubbleStyle, { padding: 6 }]}>
+          <View style={styles.videoPlaceholder}>
+            <Feather name="video" size={32} color={colors.primary} />
+            <Text style={styles.videoText}>فيديو مرفوع ✓</Text>
+          </View>
+        </View>
+      );
+    }
+
+    // رسالة نصية عادية
+    return (
+      <View style={bubbleStyle}>
+        <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>
+          {item.content}
+        </Text>
+      </View>
+    );
+  }
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior="padding"
-      keyboardVerticalOffset={0}
-    >
+    <KeyboardAvoidingView style={styles.container} behavior="padding" keyboardVerticalOffset={0}>
+      {/* ─── Header ─── */}
       <View style={styles.header}>
         <Pressable
           style={({ pressed }) => [styles.backBtn, { opacity: pressed ? 0.6 : 1 }]}
@@ -298,6 +400,7 @@ export default function ChatScreen() {
         <View style={styles.statusDot} />
       </View>
 
+      {/* ─── قائمة الرسائل ─── */}
       <FlatList
         data={reversed}
         keyExtractor={(item) => item.id}
@@ -319,35 +422,31 @@ export default function ChatScreen() {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Feather name="message-circle" size={40} color={colors.mutedForeground} />
-            <Text style={styles.emptyText}>
-              Ask me anything! I'm here to help.
-            </Text>
+            <Text style={styles.emptyText}>اسألني أي حاجة! أنا هنا أساعدك.</Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <View
-            style={[
-              styles.bubble,
-              item.role === "user" ? styles.userBubble : styles.aiBubble,
-            ]}
-          >
-            <Text
-              style={[
-                styles.bubbleText,
-                item.role === "user" ? styles.userText : styles.aiText,
-              ]}
-            >
-              {item.content}
-            </Text>
-          </View>
-        )}
+        renderItem={({ item }) => renderBubble(item)}
       />
 
+      {/* ─── شريط الإدخال + زرار 📎 ─── */}
       <View style={styles.inputRow}>
+        {/* زرار رفع الملفات 📎 */}
+        <Pressable
+          style={[styles.attachBtn, { opacity: uploading ? 0.5 : 1 }]}
+          onPress={handleAttach}
+          disabled={uploading || isStreaming}
+        >
+          {uploading ? (
+            <ActivityIndicator color={colors.primary} size="small" />
+          ) : (
+            <Feather name="paperclip" size={20} color={colors.mutedForeground} />
+          )}
+        </Pressable>
+
         <TextInput
           ref={inputRef}
           style={styles.textInput}
-          placeholder="Message Darck Arana..."
+          placeholder="اكتب رسالتك..."
           placeholderTextColor={colors.mutedForeground}
           value={input}
           onChangeText={setInput}
@@ -355,29 +454,43 @@ export default function ChatScreen() {
           blurOnSubmit={false}
           onSubmitEditing={handleSend}
         />
+
         <Pressable
           style={({ pressed }) => [
             styles.sendBtn,
             (!input.trim() || isStreaming) && styles.sendBtnDisabled,
             { opacity: pressed ? 0.8 : 1 },
           ]}
-          onPress={() => {
-            handleSend();
-            inputRef.current?.focus();
-          }}
+          onPress={() => { handleSend(); inputRef.current?.focus(); }}
           disabled={!input.trim() || isStreaming}
         >
           {isStreaming ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Feather
-              name="send"
-              size={18}
-              color={!input.trim() ? colors.mutedForeground : "#fff"}
-            />
+            <Feather name="send" size={18} color={!input.trim() ? colors.mutedForeground : "#fff"} />
           )}
         </Pressable>
       </View>
+
+      {/* ─── Modal ليمت الباقة ─── */}
+      <Modal visible={!!limitModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Feather name="lock" size={40} color={colors.primary} />
+            <Text style={styles.modalTitle}>وصلت للحد الأقصى</Text>
+            <Text style={styles.modalMsg}>{limitModal?.msg}</Text>
+            <Pressable
+              style={styles.modalUpgradeBtn}
+              onPress={() => { setLimitModal(null); router.push("/subscription"); }}
+            >
+              <Text style={styles.modalUpgradeText}>⬆️ ترقية الباقة</Text>
+            </Pressable>
+            <Pressable style={styles.modalCloseBtn} onPress={() => setLimitModal(null)}>
+              <Text style={styles.modalCloseText}>إغلاق</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }

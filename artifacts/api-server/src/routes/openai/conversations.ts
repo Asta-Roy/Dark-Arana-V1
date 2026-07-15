@@ -11,11 +11,31 @@ import {
   SendOpenaiMessageParams,
 } from "@workspace/api-zod";
 import { getGeminiClient, isAIConfigured } from "../../lib/gemini-client.js";
+import { verifyToken } from "../../lib/auth.js";
 
 const router = Router();
 
 function getSessionId(req: import("express").Request): string {
   return (req.headers["x-session-id"] as string) || "default";
+}
+
+// استخراج بيانات المستخدم من الـ token اختياري
+function getUserFromRequest(req: import("express").Request): { id: number; plan: "free" | "pro" | "premium" } | null {
+  const authHeader = req.headers["authorization"];
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  const payload = verifyToken(authHeader.slice(7));
+  if (!payload) return null;
+  const plan = (["free", "pro", "premium"].includes(payload.plan) ? payload.plan : "free") as "free" | "pro" | "premium";
+  return { id: payload.id, plan };
+}
+
+// قوة AI وحد الـ tokens حسب الباقة
+function getAIPower(plan: "free" | "pro" | "premium"): { maxOutputTokens: number; label: string } {
+  switch (plan) {
+    case "premium": return { maxOutputTokens: 8192, label: "100%" };
+    case "pro":     return { maxOutputTokens: 6144, label: "80%" };
+    default:        return { maxOutputTokens: 2048, label: "40%" }; // free
+  }
 }
 
 function buildSystemInstruction(mode?: string): string {
@@ -194,6 +214,10 @@ router.post("/conversations/:id/messages", async (req, res) => {
   const sessionId = getSessionId(req);
   const mode = body.data.mode;
 
+  // نجيب بيانات المستخدم واحنا بنحدد قوة الـ AI
+  const user = getUserFromRequest(req);
+  const aiPower = getAIPower(user?.plan ?? "free");
+
   try {
     const [conv] = await db
       .select()
@@ -241,6 +265,8 @@ router.post("/conversations/:id/messages", async (req, res) => {
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
+    // نرسل قوة الـ AI للموبايل عشان يعرضها
+    res.setHeader("X-AI-Power", aiPower.label);
     res.flushHeaders();
 
     let fullResponse = "";
@@ -250,7 +276,8 @@ router.post("/conversations/:id/messages", async (req, res) => {
       model: "gemini-2.5-flash",
       contents: chatMessages,
       config: {
-        maxOutputTokens: 8192,
+        // قوة الـ AI حسب الباقة
+        maxOutputTokens: aiPower.maxOutputTokens,
         systemInstruction: buildSystemInstruction(mode),
       },
     });
