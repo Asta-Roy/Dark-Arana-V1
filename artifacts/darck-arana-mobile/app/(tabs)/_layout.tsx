@@ -19,11 +19,19 @@ function NativeTabLayout() {
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="image">
         <Icon sf={{ default: "sparkles", selected: "sparkles" }} />
-        <Label>Image</Label>
+        <Label>صور</Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="history">
         <Icon sf={{ default: "clock", selected: "clock.fill" }} />
-        <Label>History</Label>
+        <Label>السجل</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="support">
+        <Icon sf={{ default: "questionmark.circle", selected: "questionmark.circle.fill" }} />
+        <Label>الدعم</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="account">
+        <Icon sf={{ default: "person.circle", selected: "person.circle.fill" }} />
+        <Label>حسابي</Label>
       </NativeTabs.Trigger>
     </NativeTabs>
   );
@@ -54,15 +62,9 @@ function ClassicTabLayout() {
         },
         tabBarBackground: () =>
           isIOS ? (
-            <BlurView
-              intensity={80}
-              tint="dark"
-              style={StyleSheet.absoluteFill}
-            />
+            <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
           ) : isWeb ? (
-            <View
-              style={[StyleSheet.absoluteFill, { backgroundColor: colors.card }]}
-            />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.card }]} />
           ) : null,
       }}
     >
@@ -71,35 +73,39 @@ function ClassicTabLayout() {
         options={{
           title: "Chat",
           tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="bubble.left" tintColor={color} size={22} />
-            ) : (
-              <Feather name="message-circle" size={22} color={color} />
-            ),
+            isIOS ? <SymbolView name="bubble.left" tintColor={color} size={22} /> : <Feather name="message-circle" size={22} color={color} />,
         }}
       />
       <Tabs.Screen
         name="image"
         options={{
-          title: "Image",
+          title: "صور",
           tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="sparkles" tintColor={color} size={22} />
-            ) : (
-              <Feather name="image" size={22} color={color} />
-            ),
+            isIOS ? <SymbolView name="sparkles" tintColor={color} size={22} /> : <Feather name="image" size={22} color={color} />,
         }}
       />
       <Tabs.Screen
         name="history"
         options={{
-          title: "History",
+          title: "السجل",
           tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="clock" tintColor={color} size={22} />
-            ) : (
-              <Feather name="clock" size={22} color={color} />
-            ),
+            isIOS ? <SymbolView name="clock" tintColor={color} size={22} /> : <Feather name="clock" size={22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="support"
+        options={{
+          title: "الدعم",
+          tabBarIcon: ({ color }) =>
+            isIOS ? <SymbolView name="questionmark.circle" tintColor={color} size={22} /> : <Feather name="help-circle" size={22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="account"
+        options={{
+          title: "حسابي",
+          tabBarIcon: ({ color }) =>
+            isIOS ? <SymbolView name="person.circle" tintColor={color} size={22} /> : <Feather name="user" size={22} color={color} />,
         }}
       />
     </Tabs>
@@ -107,8 +113,6 @@ function ClassicTabLayout() {
 }
 
 export default function TabLayout() {
-  if (isLiquidGlassAvailable()) {
-    return <NativeTabLayout />;
-  }
+  if (isLiquidGlassAvailable()) return <NativeTabLayout />;
   return <ClassicTabLayout />;
 }
