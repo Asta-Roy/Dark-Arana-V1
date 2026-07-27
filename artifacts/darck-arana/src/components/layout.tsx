@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { MessageSquare, PlusCircle, Image as ImageIcon, Home, Settings, Cpu, Menu, X, ChevronRight } from "lucide-react";
+import { MessageSquare, PlusCircle, Image as ImageIcon, Home, LogOut, Cpu, Menu, X, ChevronRight } from "lucide-react";
 import { useListOpenaiConversations } from "@workspace/api-client-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -180,8 +180,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="p-4 border-t border-border">
-          <button className="flex items-center gap-3 px-3 py-2 w-full rounded-lg text-sm font-medium text-muted-foreground hover:bg-white/5 hover:text-white transition-all">
-            <Settings className="w-4 h-4" /> System Settings
+          {/* زرار تسجيل الخروج */}
+          <button
+            onClick={() => {
+              // امسح الـ session وحوّل لصفحة رئيسية
+              localStorage.clear();
+              window.location.href = "/";
+            }}
+            className="flex items-center gap-3 px-3 py-2 w-full rounded-lg text-sm font-medium text-red-400/70 hover:bg-red-500/10 hover:text-red-400 transition-all duration-200"
+          >
+            <LogOut className="w-4 h-4" /> تسجيل الخروج
           </button>
         </div>
       </aside>

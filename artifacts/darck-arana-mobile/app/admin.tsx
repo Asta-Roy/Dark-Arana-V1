@@ -13,29 +13,40 @@ const BASE = process.env.EXPO_PUBLIC_DOMAIN
   ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
   : "";
 
-interface Ticket {
+// ألوان الباقات
+const PLAN_COLORS: Record<string, string> = {
+  free:    "#6b7280",
+  pro:     "#8B52FF",
+  premium: "#D42EA0",
+};
+
+const PLAN_LABELS: Record<string, string> = {
+  free:    "مجاني",
+  pro:     "برو",
+  premium: "بريميوم",
+};
+
+interface UserRow {
   id: number;
   username: string;
-  title: string;
-  description: string;
-  status: string;
-  adminReply: string;
+  email: string;
+  plan: "free" | "pro" | "premium";
+  isBanned: boolean;
   createdAt: string;
 }
 
 export default function AdminScreen() {
-  const colors = useColors();
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
+  const colors  = useColors();
+  const insets  = useSafeAreaInsets();
+  const router  = useRouter();
   const { user, token } = useAuth();
 
-  const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
-  const [replyText, setReplyText] = useState("");
-  const [sending, setSending] = useState(false);
+  const [users, setUsers]       = useState<UserRow[]>([]);
+  const [search, setSearch]     = useState("");
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState<number | null>(null); // id اليوزر اللي بيتحفظ
 
-  // Guard: only ROY can access
+  // حماية الصفحة — بس ROY يدخل
   if (!user || user.username !== "ROY") {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
@@ -47,148 +58,285 @@ export default function AdminScreen() {
     );
   }
 
-  useEffect(() => { loadTickets(); }, []);
-
-  async function loadTickets() {
+  // جلب اليوزرز من الـ API
+  async function loadUsers(q = "") {
     setLoading(true);
     try {
-      const r = await fetch(`${BASE}/api/admin/tickets`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (r.ok) setTickets(await r.json());
+      const url = q.trim()
+        ? `${BASE}/api/admin/users?search=${encodeURIComponent(q)}`
+        : `${BASE}/api/admin/users`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) setUsers(await r.json());
     } finally {
       setLoading(false);
     }
   }
 
-  async function sendReply() {
-    if (!selectedTicket || !replyText.trim()) return;
-    setSending(true);
+  useEffect(() => { loadUsers(); }, []);
+
+  // بحث فوري مع debounce بسيط
+  useEffect(() => {
+    const t = setTimeout(() => loadUsers(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // ─── تغيير الباقة ────────────────────────────────────────────────────────────
+  async function changePlan(userId: number, newPlan: "free" | "pro" | "premium") {
+    setSaving(userId);
     try {
-      const r = await fetch(`${BASE}/api/admin/tickets/${selectedTicket.id}/reply`, {
+      const r = await fetch(`${BASE}/api/admin/users/${userId}/plan`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ adminReply: replyText.trim() }),
+        body: JSON.stringify({ plan: newPlan }),
       });
       if (r.ok) {
-        Alert.alert("✅ تم الإرسال", "تم إرسال الرد وتحديث التذكرة");
-        setSelectedTicket(null);
-        setReplyText("");
-        loadTickets();
+        setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, plan: newPlan } : u));
       } else {
-        Alert.alert("خطأ", "فشل إرسال الرد");
+        Alert.alert("خطأ", "فشل تغيير الباقة");
       }
     } finally {
-      setSending(false);
+      setSaving(null);
     }
   }
 
+  // ─── حظر / رفع الحظر ─────────────────────────────────────────────────────────
+  async function toggleBan(u: UserRow) {
+    const action = u.isBanned ? "رفع الحظر" : "حظر";
+    Alert.alert(
+      `${action} "${u.username}"`,
+      u.isBanned
+        ? "هل تريد رفع الحظر عن هذا المستخدم؟"
+        : "هل تريد حظر هذا المستخدم؟ لن يستطيع تسجيل الدخول.",
+      [
+        { text: "إلغاء", style: "cancel" },
+        {
+          text: action,
+          style: u.isBanned ? "default" : "destructive",
+          onPress: async () => {
+            setSaving(u.id);
+            try {
+              const r = await fetch(`${BASE}/api/admin/users/${u.id}/ban`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ isBanned: !u.isBanned }),
+              });
+              if (r.ok) {
+                setUsers((prev) => prev.map((x) => x.id === u.id ? { ...x, isBanned: !u.isBanned } : x));
+              } else {
+                Alert.alert("خطأ", "فشل تغيير حالة الحظر");
+              }
+            } finally {
+              setSaving(null);
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  // ─── حذف يوزر ────────────────────────────────────────────────────────────────
+  async function deleteUser(u: UserRow) {
+    Alert.alert(
+      `حذف "${u.username}"`,
+      "متأكد عايز تحذف؟ الحذف نهائي ولا يمكن التراجع عنه.",
+      [
+        { text: "إلغاء", style: "cancel" },
+        {
+          text: "🗑️ حذف نهائي",
+          style: "destructive",
+          onPress: async () => {
+            setSaving(u.id);
+            try {
+              const r = await fetch(`${BASE}/api/admin/users/${u.id}`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (r.ok) {
+                setUsers((prev) => prev.filter((x) => x.id !== u.id));
+              } else {
+                const d = await r.json();
+                Alert.alert("خطأ", d.error || "فشل الحذف");
+              }
+            } finally {
+              setSaving(null);
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  // ─── Styles ──────────────────────────────────────────────────────────────────
   const s = StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 },
-    back: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 20 },
-    backText: { color: colors.mutedForeground, fontSize: 14, fontFamily: "Inter_400Regular" },
-    header: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 24 },
-    title: { fontSize: 24, fontWeight: "700", color: "#f59e0b", fontFamily: "Inter_700Bold" },
-    badge: {
-      backgroundColor: "#f59e0b22", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4,
+    container:    { flex: 1, backgroundColor: colors.background },
+    scroll:       { padding: 16, paddingTop: insets.top + 12, paddingBottom: insets.bottom + 40 },
+    header:       { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 20 },
+    backBtn:      { padding: 8 },
+    title:        { fontSize: 22, fontWeight: "700", color: "#f59e0b", fontFamily: "Inter_700Bold", flex: 1 },
+    badge:        { backgroundColor: "#f59e0b22", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
+    badgeText:    { color: "#f59e0b", fontSize: 12, fontFamily: "Inter_600SemiBold" },
+    searchBox: {
+      flexDirection: "row", alignItems: "center", backgroundColor: colors.card,
+      borderRadius: 12, borderWidth: 1, borderColor: colors.border,
+      paddingHorizontal: 12, marginBottom: 16,
     },
-    badgeText: { color: "#f59e0b", fontSize: 12, fontFamily: "Inter_600SemiBold" },
-    ticketCard: {
-      backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border,
-      padding: 16, marginBottom: 12,
+    searchInput: {
+      flex: 1, paddingVertical: 12, fontSize: 14, color: colors.foreground,
+      fontFamily: "Inter_400Regular", textAlign: "right",
     },
-    ticketTitle: { fontSize: 16, fontWeight: "700", color: colors.foreground, fontFamily: "Inter_700Bold" },
-    ticketUser: { fontSize: 13, color: colors.primary, fontFamily: "Inter_500Medium", marginTop: 3 },
-    ticketDesc: { fontSize: 14, color: colors.mutedForeground, fontFamily: "Inter_400Regular", marginTop: 8, lineHeight: 20 },
-    ticketDate: { fontSize: 12, color: colors.mutedForeground, fontFamily: "Inter_400Regular", marginTop: 8 },
-    replyBtn: {
-      flexDirection: "row", alignItems: "center", gap: 6, marginTop: 12,
-      backgroundColor: "#f59e0b22", borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8,
-      alignSelf: "flex-start",
+    userCard: {
+      backgroundColor: colors.card, borderRadius: 14, borderWidth: 1,
+      borderColor: colors.border, padding: 14, marginBottom: 10,
     },
-    replyBtnText: { color: "#f59e0b", fontSize: 14, fontFamily: "Inter_600SemiBold" },
-    modal: {
-      backgroundColor: colors.card, borderRadius: 20, borderWidth: 1, borderColor: colors.border,
-      padding: 20, marginBottom: 16,
+    userCardBanned: { borderColor: "#f87171", backgroundColor: "#3b0a0a22" },
+    topRow:       { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+    username:     { flex: 1, fontSize: 16, fontWeight: "700", color: colors.foreground, fontFamily: "Inter_700Bold" },
+    email:        { fontSize: 12, color: colors.mutedForeground, fontFamily: "Inter_400Regular", marginBottom: 10 },
+    bannedTag:    { color: "#f87171", fontSize: 12, fontFamily: "Inter_600SemiBold", marginRight: 8 },
+    planRow:      { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
+    planLabel:    { fontSize: 13, color: colors.mutedForeground, fontFamily: "Inter_400Regular" },
+    planBtns:     { flexDirection: "row", gap: 6 },
+    planBtn: {
+      paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
+      borderWidth: 1, borderColor: colors.border,
     },
-    modalTitle: { fontSize: 18, fontWeight: "700", color: colors.foreground, fontFamily: "Inter_700Bold", marginBottom: 4 },
-    modalSubtitle: { fontSize: 13, color: colors.mutedForeground, fontFamily: "Inter_400Regular", marginBottom: 16 },
-    replyInput: {
-      backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border,
-      borderRadius: 12, padding: 14, fontSize: 15, color: colors.foreground,
-      fontFamily: "Inter_400Regular", minHeight: 100, textAlignVertical: "top", marginBottom: 14,
+    planBtnText:  { fontSize: 12, fontFamily: "Inter_600SemiBold" },
+    actionRow:    { flexDirection: "row", gap: 8, marginTop: 4 },
+    banBtn: {
+      flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
+      gap: 5, paddingVertical: 8, borderRadius: 10, borderWidth: 1,
     },
-    sendBtn: {
-      backgroundColor: "#f59e0b", borderRadius: 12, paddingVertical: 14,
-      alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8,
+    delBtn: {
+      flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
+      gap: 5, paddingVertical: 8, borderRadius: 10, borderWidth: 1,
+      borderColor: "#991b1b", backgroundColor: "#3b0a0a",
     },
-    sendBtnText: { color: "#000", fontSize: 15, fontWeight: "700", fontFamily: "Inter_700Bold" },
-    cancelBtn: { marginTop: 10, alignItems: "center" },
-    cancelText: { color: colors.mutedForeground, fontSize: 14, fontFamily: "Inter_400Regular" },
-    empty: { alignItems: "center", paddingVertical: 60 },
-    emptyText: { color: colors.mutedForeground, fontSize: 16, fontFamily: "Inter_400Regular", marginTop: 12 },
+    btnText:      { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+    emptyText:    { color: colors.mutedForeground, textAlign: "center", marginTop: 40, fontFamily: "Inter_400Regular" },
+    countText:    { fontSize: 12, color: colors.mutedForeground, fontFamily: "Inter_400Regular", marginBottom: 12 },
   });
 
   return (
     <View style={s.container}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
-        <Pressable style={s.back} onPress={() => router.back()}>
-          <Feather name="arrow-right" size={18} color={colors.mutedForeground} />
-          <Text style={s.backText}>رجوع</Text>
-        </Pressable>
-
+        {/* هيدر */}
         <View style={s.header}>
-          <Feather name="shield" size={28} color="#f59e0b" />
-          <Text style={s.title}>لوحة الادمن</Text>
+          <Pressable style={s.backBtn} onPress={() => router.back()}>
+            <Feather name="arrow-right" size={20} color={colors.mutedForeground} />
+          </Pressable>
+          <Text style={s.title}>⚙️ الأسماء</Text>
           <View style={s.badge}>
-            <Text style={s.badgeText}>{tickets.length} تذكرة مفتوحة</Text>
+            <Text style={s.badgeText}>Admin</Text>
           </View>
         </View>
 
-        {/* Reply form when ticket is selected */}
-        {selectedTicket && (
-          <View style={s.modal}>
-            <Text style={s.modalTitle}>الرد على: {selectedTicket.title}</Text>
-            <Text style={s.modalSubtitle}>من: @{selectedTicket.username}</Text>
-            <TextInput
-              style={s.replyInput}
-              placeholder="اكتب ردك هنا..."
-              placeholderTextColor={colors.mutedForeground}
-              value={replyText}
-              onChangeText={setReplyText}
-              multiline
-            />
-            <Pressable style={[s.sendBtn, { opacity: sending ? 0.7 : 1 }]} onPress={sendReply} disabled={sending}>
-              {sending ? <ActivityIndicator color="#000" size="small" /> : <Feather name="send" size={18} color="#000" />}
-              <Text style={s.sendBtnText}>إرسال الرد</Text>
+        {/* حقل البحث */}
+        <View style={s.searchBox}>
+          <Feather name="search" size={16} color={colors.mutedForeground} />
+          <TextInput
+            style={s.searchInput}
+            placeholder="ابحث باسم المستخدم أو الإيميل..."
+            placeholderTextColor={colors.mutedForeground}
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {search.length > 0 && (
+            <Pressable onPress={() => setSearch("")}>
+              <Feather name="x" size={16} color={colors.mutedForeground} />
             </Pressable>
-            <Pressable style={s.cancelBtn} onPress={() => { setSelectedTicket(null); setReplyText(""); }}>
-              <Text style={s.cancelText}>إلغاء</Text>
-            </Pressable>
-          </View>
+          )}
+        </View>
+
+        {/* عدد النتائج */}
+        {!loading && (
+          <Text style={s.countText}>
+            {users.length} مستخدم{search ? ` — نتائج: "${search}"` : ""}
+          </Text>
         )}
 
+        {/* القائمة */}
         {loading ? (
           <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
-        ) : tickets.length === 0 ? (
-          <View style={s.empty}>
-            <Feather name="check-circle" size={48} color="#22c55e" />
-            <Text style={s.emptyText}>لا توجد تذاكر مفتوحة 🎉</Text>
-          </View>
+        ) : users.length === 0 ? (
+          <Text style={s.emptyText}>
+            {search ? "لا توجد نتائج للبحث" : "لا يوجد مستخدمون"}
+          </Text>
         ) : (
-          tickets.map((t) => (
-            <View key={t.id} style={s.ticketCard}>
-              <Text style={s.ticketTitle}>{t.title}</Text>
-              <Text style={s.ticketUser}>@{t.username}</Text>
-              <Text style={s.ticketDesc}>{t.description}</Text>
-              <Text style={s.ticketDate}>{new Date(t.createdAt).toLocaleString("ar-EG")}</Text>
-              <Pressable style={s.replyBtn} onPress={() => { setSelectedTicket(t); setReplyText(""); }}>
-                <Feather name="message-square" size={14} color="#f59e0b" />
-                <Text style={s.replyBtnText}>رد</Text>
-              </Pressable>
-            </View>
-          ))
+          users.map((u) => {
+            const planColor = PLAN_COLORS[u.plan] || "#6b7280";
+            const isSaving  = saving === u.id;
+
+            return (
+              <View key={u.id} style={[s.userCard, u.isBanned && s.userCardBanned]}>
+                {/* السطر الأول: اسم + حالة */}
+                <View style={s.topRow}>
+                  <Text style={s.username}>@{u.username}</Text>
+                  {u.isBanned && <Text style={s.bannedTag}>🚫 محظور</Text>}
+                  {isSaving && <ActivityIndicator size="small" color={colors.primary} />}
+                </View>
+
+                {/* الإيميل */}
+                <Text style={s.email}>{u.email}</Text>
+
+                {/* اختيار الباقة */}
+                <View style={s.planRow}>
+                  <Text style={s.planLabel}>الباقة:</Text>
+                  <View style={s.planBtns}>
+                    {(["free", "pro", "premium"] as const).map((p) => {
+                      const active = u.plan === p;
+                      return (
+                        <Pressable
+                          key={p}
+                          style={[
+                            s.planBtn,
+                            active && { backgroundColor: PLAN_COLORS[p] + "33", borderColor: PLAN_COLORS[p] },
+                          ]}
+                          onPress={() => !active && !isSaving && changePlan(u.id, p)}
+                          disabled={isSaving}
+                        >
+                          <Text style={[s.planBtnText, { color: active ? PLAN_COLORS[p] : colors.mutedForeground }]}>
+                            {PLAN_LABELS[p]}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {/* أزرار الحظر والحذف */}
+                <View style={s.actionRow}>
+                  {/* زرار الحظر */}
+                  <Pressable
+                    style={[
+                      s.banBtn,
+                      u.isBanned
+                        ? { borderColor: "#22c55e", backgroundColor: "#052e1622" }
+                        : { borderColor: "#f59e0b", backgroundColor: "#f59e0b11" },
+                    ]}
+                    onPress={() => !isSaving && toggleBan(u)}
+                    disabled={isSaving}
+                  >
+                    <Text style={{ fontSize: 14 }}>{u.isBanned ? "✅" : "🚫"}</Text>
+                    <Text style={[s.btnText, { color: u.isBanned ? "#22c55e" : "#f59e0b" }]}>
+                      {u.isBanned ? "رفع الحظر" : "بند"}
+                    </Text>
+                  </Pressable>
+
+                  {/* زرار الحذف */}
+                  <Pressable
+                    style={s.delBtn}
+                    onPress={() => !isSaving && deleteUser(u)}
+                    disabled={isSaving}
+                  >
+                    <Text style={{ fontSize: 14 }}>🗑️</Text>
+                    <Text style={[s.btnText, { color: "#f87171" }]}>حذف</Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })
         )}
       </ScrollView>
     </View>

@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import adminRouter from "./admin";
 import healthRouter from "./health";
 import openaiRouter from "./openai";
 import authRouter from "./auth";
@@ -14,5 +15,6 @@ router.use(authRouter);
 router.use(ticketsRouter);
 router.use(uploadRouter);
 router.use(paymobRouter);
+router.use(adminRouter);
 
 export default router;
