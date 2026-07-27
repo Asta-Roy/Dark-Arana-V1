@@ -1,5 +1,5 @@
 import React from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -23,10 +23,14 @@ export default function AccountScreen() {
   const plan = PLAN_LABELS[user.plan] || PLAN_LABELS.free;
 
   function handleLogout() {
-    Alert.alert("تسجيل الخروج", "هل تريد الخروج من حسابك؟", [
-      { text: "إلغاء", style: "cancel" },
-      { text: "خروج", style: "destructive", onPress: logout },
-    ]);
+    if (Platform.OS === "web") {
+      logout();
+    } else {
+      Alert.alert("تسجيل الخروج", "هل تريد الخروج من حسابك؟", [
+        { text: "إلغاء", style: "cancel" },
+        { text: "خروج", style: "destructive", onPress: logout },
+      ]);
+    }
   }
 
   const s = StyleSheet.create({
