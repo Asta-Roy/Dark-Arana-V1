@@ -97,29 +97,47 @@ export default function ChatScreen() {
 
   // ─── فتح منتقي الصور 📎 ─────────────────────────────────────────────────
   async function handleAttach() {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      if (Platform.OS !== "web") Alert.alert("الإذن مطلوب", "يرجى السماح بالوصول للصور");
-      return;
+      // على الويب مش محتاج إذن
+      if (Platform.OS !== "web") {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("الإذن مطلوب", "يرجى السماح بالوصول للصور");
+          return;
+        }
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.4,          // ضغط أكتر عشان base64 يبقى أصغر
+        base64: true,
+        allowsEditing: false,
+        exif: false,            // بدون بيانات EXIF عشان يخف
+      });
+
+      if (result.canceled || !result.assets.length) return;
+
+      const asset = result.assets[0];
+      if (!asset.base64) {
+        if (Platform.OS !== "web") Alert.alert("خطأ", "لم يتم تحميل الصورة، حاول مرة أخرى");
+        return;
+      }
+
+      // تحقق من حجم base64 — لو أكبر من 4MB نرفض
+      if (asset.base64.length > 4 * 1024 * 1024) {
+        if (Platform.OS !== "web") Alert.alert("الصورة كبيرة جداً", "اختار صورة أصغر من 3MB");
+        return;
+      }
+
+      const mimeType = asset.mimeType || "image/jpeg";
+      setPendingImage({ uri: asset.uri, base64: asset.base64, mimeType });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) {
+      console.error("handleAttach error:", e);
+      if (Platform.OS !== "web") Alert.alert("خطأ", "حدث خطأ أثناء اختيار الصورة");
     }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.7,
-      base64: true,
-      allowsEditing: false,
-    });
-
-    if (result.canceled || !result.assets.length) return;
-
-    const asset = result.assets[0];
-    if (!asset.base64) return;
-
-    const mimeType = asset.mimeType || "image/jpeg";
-    setPendingImage({ uri: asset.uri, base64: asset.base64, mimeType });
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }
 
   // ─── إرسال الرسالة ───────────────────────────────────────────────────────
