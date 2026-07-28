@@ -91,7 +91,9 @@ export const SendOpenaiMessageParams = zod.object({
 
 export const SendOpenaiMessageBody = zod.object({
   "content": zod.string(),
-  "mode": zod.enum(["normal", "thinking", "speed", "article"]).optional()
+  "mode": zod.enum(["normal", "thinking", "speed", "article"]).optional(),
+  "imageBase64": zod.string().optional(),
+  "imageMimeType": zod.string().optional()
 })
 
 

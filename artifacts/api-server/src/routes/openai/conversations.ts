@@ -278,10 +278,25 @@ router.post("/conversations/:id/messages", async (req, res) => {
       .where(eq(messages.conversationId, convId))
       .orderBy(messages.createdAt);
 
-    const chatMessages = history.map((m) => ({
+    // بناء رسائل المحادثة — مع دعم الصور
+    const chatMessages = history.slice(0, -1).map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
+      parts: [{ text: m.content || " " }],
     }));
+
+    // آخر رسالة المستخدم — نضيف الصورة لو موجودة
+    const lastUserParts: any[] = [];
+    if (body.data.content) lastUserParts.push({ text: body.data.content });
+    if (body.data.imageBase64 && body.data.imageMimeType) {
+      lastUserParts.push({
+        inlineData: {
+          mimeType: body.data.imageMimeType,
+          data: body.data.imageBase64,
+        },
+      });
+      if (!body.data.content) lastUserParts.push({ text: "حلّل هذه الصورة وصفها بالتفصيل." });
+    }
+    chatMessages.push({ role: "user", parts: lastUserParts });
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");

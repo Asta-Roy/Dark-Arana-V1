@@ -63,6 +63,7 @@ export default function ChatScreen() {
   const [showTyping, setShowTyping] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [limitModal, setLimitModal] = useState<{ msg: string } | null>(null);
+  const [pendingImage, setPendingImage] = useState<{ uri: string; base64: string; mimeType: string } | null>(null);
   const inputRef = useRef<TextInput>(null);
   const initializedRef = useRef(false);
 
@@ -94,110 +95,69 @@ export default function ChatScreen() {
     return { type: "text" };
   }
 
-  // ─── رفع الملف على Cloudinary ────────────────────────────────────────────
-  async function uploadToCloudinary(uri: string, mimeType: string): Promise<string> {
-    // نجيب إعدادات Cloudinary من السيرفر
-    const configRes = await fetch(`${BASE}/api/upload/config`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-
-    if (!configRes.ok) throw new Error("خدمة الرفع غير متاحة حالياً");
-
-    const { uploadUrl, uploadPreset } = await configRes.json() as {
-      uploadUrl: string;
-      uploadPreset: string;
-      cloudName: string;
-    };
-
-    // نرفع الملف على Cloudinary
-    const formData = new FormData();
-    const filename = uri.split("/").pop() ?? "upload";
-    // @ts-ignore — React Native FormData type
-    formData.append("file", { uri, type: mimeType, name: filename });
-    formData.append("upload_preset", uploadPreset);
-
-    const uploadRes = await fetch(uploadUrl, {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!uploadRes.ok) throw new Error("فشل رفع الملف على Cloudinary");
-
-    const data = await uploadRes.json() as { secure_url: string };
-    return data.secure_url;
-  }
-
-  // ─── فتح منتقي الصور/الفيديو 📎 ────────────────────────────────────────
+  // ─── فتح منتقي الصور 📎 ─────────────────────────────────────────────────
   async function handleAttach() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("الإذن مطلوب", "يرجى السماح بالوصول للصور والفيديوهات");
+      if (Platform.OS !== "web") Alert.alert("الإذن مطلوب", "يرجى السماح بالوصول للصور");
       return;
     }
 
-    // نفتح منتقي الميديا
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images", "videos"],
-      quality: 0.85,
+      mediaTypes: ["images"],
+      quality: 0.7,
+      base64: true,
       allowsEditing: false,
     });
 
     if (result.canceled || !result.assets.length) return;
 
     const asset = result.assets[0];
-    const isVideo = asset.type === "video";
+    if (!asset.base64) return;
 
-    setUploading(true);
-    try {
-      const mimeType = isVideo ? "video/mp4" : "image/jpeg";
-      const cloudUrl = await uploadToCloudinary(asset.uri, mimeType);
-
-      // نضيف الصورة/الفيديو كرسالة من المستخدم
-      const tag = isVideo ? "VIDEO" : "IMAGE";
-      const content = `[${tag}:${cloudUrl}]`;
-      const newMsg: Message = {
-        id: genId(),
-        role: "user",
-        content,
-        type: isVideo ? "video" : "image",
-        mediaUrl: cloudUrl,
-      };
-
-      setMessages((prev) => [...prev, newMsg]);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (e: any) {
-      Alert.alert("خطأ", e.message || "فشل رفع الملف");
-    } finally {
-      setUploading(false);
-    }
+    const mimeType = asset.mimeType || "image/jpeg";
+    setPendingImage({ uri: asset.uri, base64: asset.base64, mimeType });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }
 
   // ─── إرسال الرسالة ───────────────────────────────────────────────────────
   async function handleSend() {
     const text = input.trim();
-    if (!text || isStreaming) return;
+    if (!text && !pendingImage || isStreaming) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setInput("");
-    setMessages((prev) => [...prev, { id: genId(), role: "user", content: text, type: "text" }]);
+
+    // نضيف رسالة المستخدم في الشات
+    const userMsg: Message = pendingImage
+      ? { id: genId(), role: "user", content: text || "📷", type: "image", mediaUrl: pendingImage.uri }
+      : { id: genId(), role: "user", content: text, type: "text" };
+    setMessages((prev) => [...prev, userMsg]);
+
+    const img = pendingImage;
+    setPendingImage(null);
     setIsStreaming(true);
     setShowTyping(true);
     inputRef.current?.focus();
 
     try {
       const sessionId = (await AsyncStorage.getItem("darck-arana-session-id")) || "default";
+      const body: any = { content: text || " " };
+      if (img) {
+        body.imageBase64 = img.base64;
+        body.imageMimeType = img.mimeType;
+      }
       const res = await fetch(`${BASE}/api/openai/conversations/${convId}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
           "X-Session-ID": sessionId,
-          // نرسل الـ token عشان يطبق قوة الـ AI المناسبة
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ content: text }),
+        body: JSON.stringify(body),
       });
 
       // فحص ليمت الباقة
@@ -327,6 +287,15 @@ export default function ChatScreen() {
       backgroundColor: colors.primary, alignItems: "center", justifyContent: "center",
     },
     sendBtnDisabled: { backgroundColor: colors.muted },
+    // ─── preview الصورة قبل الإرسال ───────────────────────────────────────
+    pendingRow: {
+      flexDirection: "row", alignItems: "center", gap: 8,
+      paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4,
+      backgroundColor: colors.card,
+    },
+    pendingThumb: { width: 52, height: 52, borderRadius: 10 },
+    pendingLabel: { flex: 1, fontSize: 13, color: colors.mutedForeground, fontFamily: "Inter_400Regular" },
+    pendingRemove: { padding: 4 },
     // ─── Modal ليمت الباقة ─────────────────────────────────────────────────
     modalOverlay: {
       flex: 1, backgroundColor: "rgba(0,0,0,0.7)",
@@ -428,25 +397,32 @@ export default function ChatScreen() {
         renderItem={({ item }) => renderBubble(item)}
       />
 
+      {/* ─── preview صورة قبل الإرسال ─── */}
+      {pendingImage && (
+        <View style={styles.pendingRow}>
+          <Image source={{ uri: pendingImage.uri }} style={styles.pendingThumb} resizeMode="cover" />
+          <Text style={styles.pendingLabel}>صورة جاهزة للإرسال — اكتب سؤالك أو ابعت مباشرة</Text>
+          <Pressable style={styles.pendingRemove} onPress={() => setPendingImage(null)}>
+            <Feather name="x" size={18} color={colors.mutedForeground} />
+          </Pressable>
+        </View>
+      )}
+
       {/* ─── شريط الإدخال + زرار 📎 ─── */}
       <View style={styles.inputRow}>
-        {/* زرار رفع الملفات 📎 */}
+        {/* زرار رفع الصور 📎 */}
         <Pressable
-          style={[styles.attachBtn, { opacity: uploading ? 0.5 : 1 }]}
+          style={[styles.attachBtn, { opacity: isStreaming ? 0.5 : 1, backgroundColor: pendingImage ? colors.primary + "33" : colors.muted }]}
           onPress={handleAttach}
-          disabled={uploading || isStreaming}
+          disabled={isStreaming}
         >
-          {uploading ? (
-            <ActivityIndicator color={colors.primary} size="small" />
-          ) : (
-            <Feather name="paperclip" size={20} color={colors.mutedForeground} />
-          )}
+          <Feather name="image" size={20} color={pendingImage ? colors.primary : colors.mutedForeground} />
         </Pressable>
 
         <TextInput
           ref={inputRef}
           style={styles.textInput}
-          placeholder="اكتب رسالتك..."
+          placeholder={pendingImage ? "اكتب سؤالك عن الصورة..." : "اكتب رسالتك..."}
           placeholderTextColor={colors.mutedForeground}
           value={input}
           onChangeText={setInput}
@@ -458,16 +434,16 @@ export default function ChatScreen() {
         <Pressable
           style={({ pressed }) => [
             styles.sendBtn,
-            (!input.trim() || isStreaming) && styles.sendBtnDisabled,
+            (!input.trim() && !pendingImage || isStreaming) && styles.sendBtnDisabled,
             { opacity: pressed ? 0.8 : 1 },
           ]}
           onPress={() => { handleSend(); inputRef.current?.focus(); }}
-          disabled={!input.trim() || isStreaming}
+          disabled={(!input.trim() && !pendingImage) || isStreaming}
         >
           {isStreaming ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Feather name="send" size={18} color={!input.trim() ? colors.mutedForeground : "#fff"} />
+            <Feather name="send" size={18} color={(!input.trim() && !pendingImage) ? colors.mutedForeground : "#fff"} />
           )}
         </Pressable>
       </View>
